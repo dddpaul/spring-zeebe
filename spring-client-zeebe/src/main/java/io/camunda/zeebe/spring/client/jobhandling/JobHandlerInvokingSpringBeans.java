@@ -15,6 +15,9 @@ import io.camunda.zeebe.spring.client.exception.ZeebeBpmnError;
 import org.slf4j.Logger;
 
 import java.io.InputStream;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +45,7 @@ public class JobHandlerInvokingSpringBeans implements JobHandler {
 
   @Override
   public void handle(JobClient jobClient, ActivatedJob job) throws Exception {
+    Instant now = Instant.now();
     // TODO: Figuring out parameters and assignments could probably also done only once in the beginning to save some computing time on each invocation
     List<Object> args = createParameters(jobClient, job, workerValue.getMethodInfo().getParameters());
     LOG.trace("Handle {} and invoke worker {}", job, workerValue);
@@ -62,6 +66,7 @@ public class JobHandlerInvokingSpringBeans implements JobHandler {
         LOG.trace("Auto completing {}", job);
         // TODO: We should probably move the metrics recording to the callback of a successful command execution to avoid wrong counts
         metricsRecorder.increase(MetricsRecorder.METRIC_NAME_JOB, MetricsRecorder.ACTION_COMPLETED, job.getType());
+        handleDuration(job, Duration.between(now, Instant.now()));
         CommandWrapper command = new CommandWrapper(
           createCompleteCommand(jobClient, job, result),
           job,
@@ -78,6 +83,19 @@ public class JobHandlerInvokingSpringBeans implements JobHandler {
         job,
         commandExceptionHandlingStrategy);
       command.executeAsync();
+    }
+  }
+
+  private void handleDuration(ActivatedJob job, Duration duration) {
+    LOG.trace("Job execution duration is {} ms for {}", duration.toMillis(), job);
+    if (duration.minus(Duration.of(200, ChronoUnit.MILLIS)).isNegative()) {
+      metricsRecorder.increase(MetricsRecorder.METRIC_NAME_JOB, MetricsRecorder.DURATION_200MSEC, job.getType());
+    } else if (duration.minus(Duration.of(1, ChronoUnit.SECONDS)).isNegative()) {
+      metricsRecorder.increase(MetricsRecorder.METRIC_NAME_JOB, MetricsRecorder.DURATION_1SEC, job.getType());
+    } else if (duration.minus(Duration.of(5, ChronoUnit.SECONDS)).isNegative()) {
+      metricsRecorder.increase(MetricsRecorder.METRIC_NAME_JOB, MetricsRecorder.DURATION_5SEC, job.getType());
+    } else {
+      metricsRecorder.increase(MetricsRecorder.METRIC_NAME_JOB, MetricsRecorder.DURATION_OTHER, job.getType());
     }
   }
 
